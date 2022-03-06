@@ -1,7 +1,9 @@
 package com.xxx
 
 import org.apache.hudi.DataSourceReadOptions.{BEGIN_INSTANTTIME, QUERY_TYPE, QUERY_TYPE_INCREMENTAL_OPT_VAL}
+import org.apache.hudi.DataSourceWriteOptions.{OPERATION, PARTITIONPATH_FIELD, PRECOMBINE_FIELD, RECORDKEY_FIELD}
 import org.apache.hudi.QuickstartUtils.{DataGenerator, convertToStringList}
+import org.apache.hudi.config.HoodieWriteConfig.TBL_NAME
 import org.apache.spark.sql.{SaveMode, SparkSession}
 
 /**
@@ -33,7 +35,9 @@ object HudiSparkDemo {
     //snapShotQueryDataByTime(sc,tablePath)
 
     //updateData(sc, tableName, tablePath,dataGenerator)
-    incrementalQueryData(sc, tablePath)
+    //incrementalQueryData(sc, tablePath)
+
+    deleteData(sc, tableName, tablePath)
     sc.stop()
   }
   // 任务一：模拟数据，插入Hudi表，采用COW模式
@@ -146,4 +150,38 @@ object HudiSparkDemo {
              |where fare > 20.0""".stripMargin).show(10,false)
   }
 
+  //删除数据
+  def deleteData(sc: SparkSession,tableName: String ,path: String): Unit ={
+    import sc.implicits._
+
+    val deleteDF = sc.read.format("hudi").load(path)
+    println("conut = " + deleteDF.count())
+
+    val delete = deleteDF.select($"uuid", $"partitionpath").limit(2)
+
+    import org.apache.hudi.QuickstartUtils._
+    val dataGenerator = new DataGenerator()
+
+    var deletes = dataGenerator.generateDeletes(delete.collectAsList())
+
+    import scala.collection.JavaConverters._
+
+    val result = sc.read.json(sc.sparkContext.parallelize(deletes.asScala, 2))
+
+    result.write.mode(SaveMode.Append)
+      .format("hudi")
+      .option("hoodie.insert.shuffle.parallelism", "2")
+      .option("hoodie.upsert.shuffle.parallelism", "2")
+      // Hudi 表的属性值设置
+      .option(OPERATION.key(),"delete")
+      .option(PRECOMBINE_FIELD.key(), "ts")
+      .option(RECORDKEY_FIELD.key(), "uuid")
+      .option(PARTITIONPATH_FIELD.key(), "partitionpath")
+      .option(TBL_NAME.key(), tableName)
+      .save(path)
+
+    val re = sc.read.format("hudi").load(path)
+    println("conut = " + re.count())
+
+  }
 }
